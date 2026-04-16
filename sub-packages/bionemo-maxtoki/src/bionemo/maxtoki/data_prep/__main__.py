@@ -41,8 +41,8 @@ def get_parser() -> argparse.ArgumentParser:
     tok.add_argument("--data-directory", required=True, help="Directory containing .h5ad files.")
     tok.add_argument("--output-directory", required=True, help="Directory for output .dataset.")
     tok.add_argument("--output-prefix", required=True, help="Prefix for output .dataset.")
-    tok.add_argument("--gene-median-file", default=None, help="Path to gene median JSON file.")
-    tok.add_argument("--token-dictionary-file", default=None, help="Path to token dictionary JSON file.")
+    tok.add_argument("--gene-median-file", required=True, help="Path to gene median JSON file.")
+    tok.add_argument("--token-dictionary-file", required=True, help="Path to token dictionary JSON file.")
     tok.add_argument("--gene-mapping-file", default=None, help="Path to ensembl mapping JSON file.")
     tok.add_argument(
         "--custom-attrs", default=None, help='JSON dict of custom attributes, e.g. \'{"cell_type": "cell_type"}\'.'
@@ -59,7 +59,7 @@ def get_parser() -> argparse.ArgumentParser:
     ap.add_argument("--data-directory", required=True, help="Path to .dataset file or directory.")
     ap.add_argument("--output-directory", required=True, help="Directory for output files.")
     ap.add_argument("--output-prefix", required=True, help="Prefix for output files.")
-    ap.add_argument("--token-dictionary-file", default=None, help="Path to token dictionary JSON file.")
+    ap.add_argument("--token-dictionary-file", required=True, help="Path to token dictionary JSON file.")
     ap.add_argument("--max-timepoint", type=int, required=True, help="Maximum timepoint for time dictionary.")
     ap.add_argument("--num-examples", type=int, default=10_000_000, help="Number of cell paragraphs.")
     ap.add_argument("--min-timepoints", type=int, default=3, help="Minimum timepoints per paragraph.")
@@ -97,11 +97,6 @@ def main(argv=None):
     if args.command == "tokenize":
         from bionemo.maxtoki.data_prep import TranscriptomeTokenizer
 
-        if not args.gene_median_file:
-            raise ValueError("--gene-median-file is required.")
-        if not args.token_dictionary_file:
-            raise ValueError("--token-dictionary-file is required.")
-
         custom_attrs = json.loads(args.custom_attrs) if args.custom_attrs else None
         tk = TranscriptomeTokenizer(
             custom_attr_name_dict=custom_attrs,
@@ -119,9 +114,6 @@ def main(argv=None):
 
     elif args.command == "assemble-paragraphs":
         from bionemo.maxtoki.data_prep import CellParagraphAssembler
-
-        if not args.token_dictionary_file:
-            raise ValueError("--token-dictionary-file is required.")
 
         is_train = not args.is_eval
 

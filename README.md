@@ -99,7 +99,7 @@ python -m bionemo.maxtoki.data_prep tokenize \
     --nproc 8
 ```
 
-Resource files (token dictionary, gene median, Ensembl mapping) default to the bundled versions in `bionemo/maxtoki/data_prep/resources/`. Pass `--token-dictionary-file`, `--gene-median-file`, or `--gene-mapping-file` to override.
+`--token-dictionary-file` and `--gene-median-file` are required. `--gene-mapping-file` (Ensembl mapping) is optional and only needed when mapping gene names to Ensembl IDs.
 
 **Stage 2: Assemble cell paragraphs** — groups cells from the same trajectory into training sequences that include time-lapse tokens.
 
@@ -306,6 +306,10 @@ Generation-only arguments:
 
 ### BioNeMo to HuggingFace
 
+`export_hf` loads a checkpoint saved with BioNeMo, maps the weights to Huggingface's `CausalLM`, and saves the corresponding checkpoint.
+
+loads the HF weights into a BioNeMo checkpoint by running one training step with a zero learning rate and saving the result. The output is a standard NeMo checkpoint directory that can be used with `--initial-ckpt-path` in training or `--initial-ckpt-path` in predict.
+
 ```bash
 python -m bionemo.maxtoki.export_hf \
     --model-path /path/to/bionemo/checkpoint \
@@ -327,6 +331,8 @@ python -m bionemo.maxtoki.export_hf \
 
 ### HuggingFace to BioNeMo
 
+`import_hf` loads the HF weights into a BioNeMo checkpoint by running one training step with a zero learning rate and saving the result. The output is a standard NeMo checkpoint directory that can be used with `--initial-ckpt-path` in training or `--initial-ckpt-path` in predict.
+
 ```bash
 python -m bionemo.maxtoki.import_hf \
     --hf-model-path /path/to/hf/model \
@@ -342,4 +348,3 @@ python -m bionemo.maxtoki.import_hf \
 
 - J Gόmez Ortega, R D Nadadur, A Kunitomi, S Kothen-Hill, J U G Wagner, S D Kurtoglu, B Kim, M M Reid, T Lu, K Washizu, L Zanders, H Chen, Y Zhang, S Ancheta, S Lichtarge, W A Johnson, C Thompson, D M Phan, A J Combes, A C Yang, N Tadimeti, S Dimmeler, S Yamanaka, M Alexanian, C V Theodoris. Temporal AI model predicts drivers of cell state trajectories across human aging. _**bioRxiv**_, 1 Apr 2026.
 
-`import_hf` loads the HF weights into a BioNeMo checkpoint by running one training step with a zero learning rate and saving the result. The output is a standard NeMo checkpoint directory that can be used with `--initial-ckpt-path` in training or `--initial-ckpt-path` in predict.
