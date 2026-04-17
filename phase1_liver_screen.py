@@ -373,19 +373,36 @@ POSITIVE_CONTROL_GENES = [
 ]
 
 specs = [make_noop_spec()]
+positive_control_ensgs: set[str] = set()
 
 for gene in POSITIVE_CONTROL_GENES:
     try:
         eid = symbol_to_ensembl(gene)
         if eid in token_dict:
             specs.append(make_knockout_spec(tokenizer, eid))
+            positive_control_ensgs.add(eid)
             print(f"  KO spec: {gene} -> {eid} (token {token_dict[eid]})")
         else:
             print(f"  SKIP: {gene} -> {eid} not in MaxToki vocabulary")
     except KeyError as e:
         print(f"  SKIP: {e}")
 
-print(f"\nTotal specs: {len(specs)} (1 baseline + {len(specs)-1} knockouts)")
+# %% — Add null-distribution KOs for z-scoring
+# Sample random Ensembl genes from the vocabulary; their mean_delta across cells
+# defines the noise floor for each cell type. Effect rate of random genes will
+# be low in most cell types (good: matches the sparsity of positive controls).
+import random
+
+N_NULL_GENES = 50  # 50 * 109 pairs ~= 5.5k forward passes, ~15-20 min on A100
+_null_rng = random.Random(42)
+_vocab_ensgs = [k for k in token_dict if isinstance(k, str) and k.startswith("ENSG")]
+_null_pool = [e for e in _vocab_ensgs if e not in positive_control_ensgs]
+null_ensgs = _null_rng.sample(_null_pool, N_NULL_GENES)
+for eid in null_ensgs:
+    specs.append(make_knockout_spec(tokenizer, eid))
+
+print(f"\nTotal specs: {len(specs)} "
+      f"(1 baseline + {len(positive_control_ensgs)} positive + {N_NULL_GENES} null)")
 
 # %% — Build screen dataset
 SCREEN_DIR = OUTPUT_DIR / "screen_fibrosis_v1"
@@ -460,6 +477,44 @@ if "delta_vs_baseline" in df.columns:
         print(hsc_hits.sort_values("mean_delta", ascending=False).to_string())
 else:
     print("No delta_vs_baseline column — check that baseline spec was included.")
+
+# %% — Z-score positive controls against the null distribution
+# For each cell type, the null is the per-gene mean_delta over the N_NULL_GENES
+# random KOs. We restrict to cells where the KO actually took effect, because a
+# zero-delta "no-op" KO artificially shrinks the null variance.
+positive_spec_names = {f"KO:{e}" for e in positive_control_ensgs}
+null_spec_names = {f"KO:{e}" for e in null_ensgs}
+
+df["spec_class"] = "baseline"
+df.loc[df["spec_name"].isin(positive_spec_names), "spec_class"] = "positive"
+df.loc[df["spec_name"].isin(null_spec_names), "spec_class"] = "null"
+
+effective = df[df["ko_took_effect"]]
+null_per_gene = (
+    effective[effective["spec_class"] == "null"]
+    .groupby(["cell_type", "spec_name"])["delta_vs_baseline"]
+    .mean()
+)
+null_stats = null_per_gene.groupby("cell_type").agg(["mean", "std", "count"])
+print("\n=== Null-gene KO distribution per cell type (effective KOs only) ===")
+print(null_stats.to_string())
+
+positive_per_gene = (
+    effective[effective["spec_class"] == "positive"]
+    .groupby(["cell_type", "spec_name"])
+    .agg(
+        mean_delta=("delta_vs_baseline", "mean"),
+        n_effective_cells=("delta_vs_baseline", "count"),
+    )
+)
+positive_per_gene["null_mean"] = positive_per_gene.index.get_level_values("cell_type").map(null_stats["mean"])
+positive_per_gene["null_std"] = positive_per_gene.index.get_level_values("cell_type").map(null_stats["std"])
+positive_per_gene["z_score"] = (
+    (positive_per_gene["mean_delta"] - positive_per_gene["null_mean"]) / positive_per_gene["null_std"]
+)
+print("\n=== Positive controls z-scored against null (|z|>2 is notable) ===")
+print(positive_per_gene.sort_values("z_score", ascending=False).to_string())
+positive_per_gene.to_csv(SCREEN_DIR / "positive_controls_zscored.csv")
 
 # %% [markdown]
 # ## Interpretation
