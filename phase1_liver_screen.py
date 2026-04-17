@@ -163,6 +163,42 @@ if "n_counts" not in adata_fib.obs.columns:
 else:
     print(f"  'n_counts' present, range: {adata_fib.obs['n_counts'].min():.0f} – {adata_fib.obs['n_counts'].max():.0f}")
 
+# %% — Diagnose gene ID encoding and pick the right column for tokenization
+# MaxToki's token dict is keyed by Ensembl IDs (ENSG...). The ensembl_mapping_dict
+# is `gene_symbol -> ENSG` (upper-cased keys). We need var.ensembl_id to contain
+# values that, after .str.upper().map(gene_mapping_dict), yield entries in the token dict.
+with open(TOKEN_DICT_PATH) as f:
+    _token_dict_probe = json.load(f)
+with open(ENSEMBL_MAP_PATH) as f:
+    _map_probe = json.load(f)
+
+_probe = adata_fib.var
+print(f"var.ensembl_id sample: {list(_probe['ensembl_id'].astype(str).iloc[:5])}")
+print(f"var.gene_symbol sample: {list(_probe['gene_symbol'].astype(str).iloc[:5])}")
+print(f"var.index sample: {list(_probe.index[:5])}")
+
+_ens_hits_direct = _probe["ensembl_id"].astype(str).str.upper().isin(_token_dict_probe).sum()
+_ens_hits_via_map = _probe["ensembl_id"].astype(str).str.upper().map(_map_probe).isin(_token_dict_probe).sum()
+_sym_hits_via_map = _probe["gene_symbol"].astype(str).str.upper().map(_map_probe).isin(_token_dict_probe).sum()
+_idx_hits_via_map = _probe.index.astype(str).str.upper().map(_map_probe).isin(_token_dict_probe).sum()
+print(f"  ensembl_id direct-hits in token_dict: {_ens_hits_direct}")
+print(f"  ensembl_id -> mapping -> token_dict:  {_ens_hits_via_map}")
+print(f"  gene_symbol -> mapping -> token_dict: {_sym_hits_via_map}")
+print(f"  var.index  -> mapping -> token_dict:  {_idx_hits_via_map}")
+
+# Pick whichever column has the most hits through the mapping dict.
+_candidates = [
+    ("ensembl_id", _ens_hits_via_map),
+    ("gene_symbol", _sym_hits_via_map),
+    ("index", _idx_hits_via_map),
+]
+_best_col, _best_hits = max(_candidates, key=lambda t: t[1])
+print(f"Best column for tokenization: '{_best_col}' ({_best_hits} hits)")
+if _best_hits < 1000:
+    raise SystemExit(
+        f"No column hits the vocab well enough ({_best_hits} hits). Inspect var columns manually."
+    )
+
 # %% — Save filtered h5ad files for tokenization
 # The MaxToki tokenizer requires obs.time and obs.unique_cell_id columns, and
 # --data-directory scans for ALL .h5ad files in the dir, so give each split
@@ -173,6 +209,11 @@ for adata_split in (adata_young, adata_old):
     # time_group is defaulted (not None) in TranscriptomeTokenizer; group by donor
     # so each donor's cells form their own pseudo-trajectory group.
     adata_split.obs["time_group"] = adata_split.obs["donor"].astype(str)
+    # Overwrite var.ensembl_id with whichever column actually maps to the vocab.
+    if _best_col == "gene_symbol":
+        adata_split.var["ensembl_id"] = adata_split.var["gene_symbol"].astype(str)
+    elif _best_col == "index":
+        adata_split.var["ensembl_id"] = adata_split.var.index.astype(str)
 
 young_input_dir = OUTPUT_DIR / "input_young"
 old_input_dir = OUTPUT_DIR / "input_old"
