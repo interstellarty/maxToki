@@ -170,6 +170,9 @@ else:
 for adata_split in (adata_young, adata_old):
     adata_split.obs["time"] = 0  # Tabula Sapiens is cross-sectional; use 0 as placeholder
     adata_split.obs["unique_cell_id"] = adata_split.obs_names.astype(str)
+    # time_group is defaulted (not None) in TranscriptomeTokenizer; group by donor
+    # so each donor's cells form their own pseudo-trajectory group.
+    adata_split.obs["time_group"] = adata_split.obs["donor"].astype(str)
 
 young_input_dir = OUTPUT_DIR / "input_young"
 old_input_dir = OUTPUT_DIR / "input_old"
