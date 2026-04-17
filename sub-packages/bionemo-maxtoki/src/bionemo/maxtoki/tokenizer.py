@@ -564,20 +564,26 @@ class MaxTokiTokenizer(IOMixin):
                 continue
 
     def _build_special_tokens(self):
+        # <bos>, <eos>, <pad>, <mask> are required for any MaxToki stage.
+        # <boq>, <eoq> only exist in the temporal/fine-tuned vocabulary; the
+        # published pretraining-only checkpoint ships without them, so load
+        # them lazily and surface a clear None instead of a KeyError.
         self.special_tokens = {
             "<bos>": self.token_dictionary["<bos>"],
             "<eos>": self.token_dictionary["<eos>"],
-            "<eoq>": self.token_dictionary["<eoq>"],
-            "<boq>": self.token_dictionary["<boq>"],
             "<pad>": self.token_dictionary["<pad>"],
             "<mask>": self.token_dictionary["<mask>"],
         }
+        for optional in ("<boq>", "<eoq>"):
+            if optional in self.token_dictionary:
+                self.special_tokens[optional] = self.token_dictionary[optional]
+
         self.bos_id = self.special_tokens["<bos>"]
         self.eos_id = self.special_tokens["<eos>"]
-        self.eoq_id = self.special_tokens["<eoq>"]
-        self.boq_id = self.special_tokens["<boq>"]
         self.pad_id = self.special_tokens["<pad>"]
         self.mask_id = self.special_tokens["<mask>"]
+        self.boq_id = self.special_tokens.get("<boq>")
+        self.eoq_id = self.special_tokens.get("<eoq>")
 
         self.special_token_ids = {v: k for k, v in self.special_tokens.items()}
 
