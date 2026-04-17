@@ -1,0 +1,392 @@
+# %% [markdown]
+# # Phase 1: Tabula Sapiens Liver — Data Prep & Perturbation Screen
+#
+# Run inside the Apptainer container on a GPU node:
+# ```bash
+# srun -p gpu --gres=gpu:a100:1 --cpus-per-task=8 --mem=64G --time=02:00:00 --pty bash
+# module load apptainer
+# apptainer shell --nv -B $HOME/maxToki:/workspace -B /ptmp/$USER:/ptmp/$USER $HOME/maxToki/maxtoki.sif
+# cd /workspace
+# python phase1_liver_screen.py          # or open in JupyterLab
+# ```
+
+# %% — Imports and paths
+import json
+import warnings
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import scanpy as sc
+
+warnings.filterwarnings("ignore", category=FutureWarning)
+
+H5AD_PATH = Path("/workspace/Liver_TSP1_30_version2d_10X_smartseq_scvi_Nov122024.h5ad")
+RESOURCES = Path("/workspace/resources")
+TOKEN_DICT_PATH = RESOURCES / "token_dictionary_v1.json"
+GENE_MEDIAN_PATH = RESOURCES / "gene_median_dictionary_v1.json"
+ENSEMBL_MAP_PATH = RESOURCES / "ensembl_mapping_dict_v1.json"
+HF_MODEL_PATH = Path("/ptmp/artfi/models/maxtoki-hf/MaxToki-217M-HF")
+OUTPUT_DIR = Path("/ptmp/artfi/liver_screen")
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+# %% — Load h5ad and inspect structure
+adata = sc.read_h5ad(H5AD_PATH)
+print(f"Shape: {adata.shape[0]} cells x {adata.shape[1]} genes")
+print(f"\nobs columns: {list(adata.obs.columns)}")
+print(f"\nvar columns: {list(adata.var.columns)}")
+print(f"\nvar index (first 5): {list(adata.var.index[:5])}")
+
+# %% — Explore cell types
+if "cell_type" in adata.obs.columns:
+    ct_col = "cell_type"
+elif "cell_ontology_class" in adata.obs.columns:
+    ct_col = "cell_ontology_class"
+elif "cell_type_name" in adata.obs.columns:
+    ct_col = "cell_type_name"
+else:
+    print("Available obs columns:", list(adata.obs.columns))
+    ct_col = None  # MANUAL: set this to the correct column name after inspecting
+
+if ct_col:
+    print(f"\nUsing cell type column: '{ct_col}'")
+    print(adata.obs[ct_col].value_counts())
+
+# %% — Explore donor age
+age_candidates = [c for c in adata.obs.columns if "age" in c.lower() or "donor" in c.lower()]
+print(f"Age/donor columns: {age_candidates}")
+for col in age_candidates:
+    print(f"\n'{col}' unique values: {sorted(adata.obs[col].unique())[:20]}")
+
+# %% [markdown]
+# ## MANUAL CHECK
+#
+# After running the cells above, fill in these values based on what you see:
+
+# %%
+# ---- CONFIGURE THESE AFTER INSPECTING OUTPUT ABOVE ----
+CELL_TYPE_COL = ct_col or "cell_type"  # adjust if different
+AGE_COL = "donor_age"                  # adjust based on exploration above
+
+# Fibrosis-relevant cell types (adjust spelling to match your data)
+FIBROSIS_CELL_TYPES = [
+    "hepatocyte",
+    "hepatic stellate cell",
+    "cholangiocyte",
+]
+
+# Age bins (adjust based on actual donor age distribution)
+YOUNG_MAX = 35   # inclusive upper bound for "young"
+OLD_MIN = 60     # inclusive lower bound for "old"
+
+# %% — Filter to fibrosis-relevant cell types
+# Try case-insensitive matching
+ct_values = adata.obs[CELL_TYPE_COL].str.lower()
+target_lower = [t.lower() for t in FIBROSIS_CELL_TYPES]
+mask_ct = ct_values.isin(target_lower)
+
+if mask_ct.sum() == 0:
+    # Try substring matching as fallback
+    mask_ct = ct_values.apply(lambda x: any(t in x for t in target_lower))
+
+print(f"Cells matching fibrosis cell types: {mask_ct.sum()} / {len(adata)}")
+adata_fib = adata[mask_ct].copy()
+print(adata_fib.obs[CELL_TYPE_COL].value_counts())
+
+# %% — Parse ages and stratify young/old
+# Ages may be strings like "30-35" or "40" or "40-44" — handle both
+ages_raw = adata_fib.obs[AGE_COL]
+print(f"Age dtype: {ages_raw.dtype}")
+print(f"Sample values: {ages_raw.unique()[:10]}")
+
+
+def parse_age(val):
+    """Parse age value to a numeric midpoint. Handles '30', '30-35', '30s' formats."""
+    if isinstance(val, (int, float)):
+        return float(val)
+    s = str(val).strip().rstrip("s").rstrip("+")
+    if "-" in s:
+        parts = s.split("-")
+        return (float(parts[0]) + float(parts[1])) / 2
+    try:
+        return float(s)
+    except ValueError:
+        return np.nan
+
+
+adata_fib.obs["age_numeric"] = ages_raw.map(parse_age)
+print(f"\nAge range: {adata_fib.obs['age_numeric'].min():.0f} – {adata_fib.obs['age_numeric'].max():.0f}")
+print(f"Age distribution:\n{adata_fib.obs['age_numeric'].describe()}")
+
+young_mask = adata_fib.obs["age_numeric"] <= YOUNG_MAX
+old_mask = adata_fib.obs["age_numeric"] >= OLD_MIN
+
+print(f"\nYoung cells (age <= {YOUNG_MAX}): {young_mask.sum()}")
+print(f"Old cells (age >= {OLD_MIN}): {old_mask.sum()}")
+
+# Per cell type breakdown
+for ct in adata_fib.obs[CELL_TYPE_COL].unique():
+    ct_mask = adata_fib.obs[CELL_TYPE_COL] == ct
+    n_young = (ct_mask & young_mask).sum()
+    n_old = (ct_mask & old_mask).sum()
+    print(f"  {ct}: {n_young} young, {n_old} old")
+
+adata_young = adata_fib[young_mask].copy()
+adata_old = adata_fib[old_mask].copy()
+
+# %% — Check required fields for MaxToki tokenization
+print("Checking required fields...")
+
+# 1. var.ensembl_id
+has_ensembl_col = "ensembl_id" in adata_fib.var.columns
+index_looks_ensembl = adata_fib.var.index[0].startswith("ENSG")
+print(f"  var has 'ensembl_id' column: {has_ensembl_col}")
+print(f"  var.index looks like Ensembl IDs: {index_looks_ensembl}")
+
+if not has_ensembl_col and index_looks_ensembl:
+    print("  -> Will use --use-h5ad-index flag for tokenization")
+    USE_INDEX_AS_ENSEMBL = True
+elif has_ensembl_col:
+    USE_INDEX_AS_ENSEMBL = False
+else:
+    print("  WARNING: No Ensembl IDs found. Check var columns:")
+    print(f"    var columns: {list(adata_fib.var.columns)}")
+    print(f"    var index sample: {list(adata_fib.var.index[:5])}")
+    USE_INDEX_AS_ENSEMBL = False
+
+# 2. obs.n_counts
+if "n_counts" not in adata_fib.obs.columns:
+    print("  'n_counts' missing — computing from expression matrix...")
+    adata_young.obs["n_counts"] = np.array(adata_young.X.sum(axis=1)).flatten()
+    adata_old.obs["n_counts"] = np.array(adata_old.X.sum(axis=1)).flatten()
+    print(f"  n_counts range (young): {adata_young.obs['n_counts'].min():.0f} – {adata_young.obs['n_counts'].max():.0f}")
+else:
+    print(f"  'n_counts' present, range: {adata_fib.obs['n_counts'].min():.0f} – {adata_fib.obs['n_counts'].max():.0f}")
+
+# %% — Save filtered h5ad files for tokenization
+young_h5ad = OUTPUT_DIR / "ts_liver_young.h5ad"
+old_h5ad = OUTPUT_DIR / "ts_liver_old.h5ad"
+adata_young.write_h5ad(young_h5ad)
+adata_old.write_h5ad(old_h5ad)
+print(f"Saved {len(adata_young)} young cells -> {young_h5ad}")
+print(f"Saved {len(adata_old)} old cells -> {old_h5ad}")
+
+# %% — Tokenize with MaxToki pipeline
+import subprocess
+
+for label, h5ad_path in [("young", young_h5ad), ("old", old_h5ad)]:
+    out_dir = OUTPUT_DIR / f"tokenized_{label}"
+    out_dir.mkdir(exist_ok=True)
+
+    cmd = [
+        "python", "-m", "bionemo.maxtoki.data_prep", "tokenize",
+        "--data-directory", str(h5ad_path.parent),
+        "--output-directory", str(out_dir),
+        "--output-prefix", f"ts_liver_{label}",
+        "--token-dictionary-file", str(TOKEN_DICT_PATH),
+        "--gene-median-file", str(GENE_MEDIAN_PATH),
+        "--gene-mapping-file", str(ENSEMBL_MAP_PATH),
+        "--nproc", "4",
+        "--model-input-size", "4096",
+    ]
+    if USE_INDEX_AS_ENSEMBL:
+        cmd.append("--use-h5ad-index")
+
+    print(f"\nTokenizing {label} cells...")
+    print(f"  Command: {' '.join(cmd)}")
+
+    # NOTE: the tokenizer expects a directory of h5ad files. We saved one file
+    # per split. If it errors, try symlinking into a dedicated folder.
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"  STDERR: {result.stderr[-2000:]}")
+        print(f"  Consider: the tokenizer scans --data-directory for ALL .h5ad files.")
+        print(f"  Fix: create a directory with only this file, or symlink.")
+    else:
+        print(f"  Done: {out_dir}")
+
+# %% — Load tokenized datasets and inspect
+import datasets
+
+ds_young_path = OUTPUT_DIR / "tokenized_young"
+ds_old_path = OUTPUT_DIR / "tokenized_old"
+
+# Find the .dataset directory inside the tokenized output
+young_datasets = list(ds_young_path.glob("*.dataset"))
+old_datasets = list(ds_old_path.glob("*.dataset"))
+print(f"Young dataset dirs: {young_datasets}")
+print(f"Old dataset dirs: {old_datasets}")
+
+if young_datasets and old_datasets:
+    ds_young = datasets.load_from_disk(str(young_datasets[0]))
+    ds_old = datasets.load_from_disk(str(old_datasets[0]))
+    print(f"\nYoung: {len(ds_young)} cells, sample length: {len(ds_young[0]['input_ids'])}")
+    print(f"Old:   {len(ds_old)} cells, sample length: {len(ds_old[0]['input_ids'])}")
+    print(f"Young sample first 10 tokens: {ds_young[0]['input_ids'][:10]}")
+else:
+    print("Tokenized datasets not found — check tokenization output above.")
+    print("Listing output dirs:")
+    for p in [ds_young_path, ds_old_path]:
+        print(f"  {p}: {list(p.iterdir()) if p.exists() else 'MISSING'}")
+
+# %% — Build CellPair objects for the screen
+from bionemo.maxtoki.tokenizer import MaxTokiTokenizer
+from bionemo.maxtoki.perturb import (
+    CellPair, build_screen_dataset_scoring, score_screen,
+    make_knockout_spec, make_noop_spec, make_overexpression_spec,
+)
+
+with open(TOKEN_DICT_PATH) as f:
+    token_dict = json.load(f)
+tokenizer = MaxTokiTokenizer(token_dict)
+
+with open(ENSEMBL_MAP_PATH) as f:
+    ensembl_map = json.load(f)
+
+
+def symbol_to_ensembl(symbol):
+    """Resolve a gene symbol to its Ensembl ID via the mapping dict."""
+    eid = ensembl_map.get(symbol)
+    if eid is None:
+        raise KeyError(f"Gene symbol {symbol!r} not found in ensembl_mapping_dict_v1.json")
+    return eid
+
+
+# Limit to N cells per type for an initial run (full screen later)
+MAX_CELLS_PER_TYPE = 50
+
+# Pick representative young cells as anchors (one per cell type)
+# and pair each old cell with a young anchor of the same type.
+pairs = []
+cell_types_in_data = adata_old.obs[CELL_TYPE_COL].unique()
+
+for ct in cell_types_in_data:
+    young_ct = ds_young.filter(
+        lambda x, idx: adata_young.obs.iloc[idx][CELL_TYPE_COL] == ct,
+        with_indices=True,
+    ) if len(ds_young) > 0 else None
+    old_ct = ds_old.filter(
+        lambda x, idx: adata_old.obs.iloc[idx][CELL_TYPE_COL] == ct,
+        with_indices=True,
+    ) if len(ds_old) > 0 else None
+
+    if young_ct is None or old_ct is None or len(young_ct) == 0 or len(old_ct) == 0:
+        print(f"  Skipping {ct}: no young or old cells after tokenization")
+        continue
+
+    # Use a single representative young anchor (median-length cell)
+    young_lengths = [len(r["input_ids"]) for r in young_ct]
+    anchor_idx = int(np.argsort(young_lengths)[len(young_lengths) // 2])
+    anchor_tokens = young_ct[anchor_idx]["input_ids"]
+
+    n_old = min(len(old_ct), MAX_CELLS_PER_TYPE)
+    for i in range(n_old):
+        pairs.append(CellPair(
+            young_tokens=anchor_tokens,
+            old_tokens=old_ct[i]["input_ids"],
+            cell_id=f"{ct}:{i}",
+            metadata={"cell_type": ct},
+        ))
+
+    print(f"  {ct}: 1 young anchor, {n_old} old cells -> {n_old} pairs")
+
+print(f"\nTotal pairs: {len(pairs)}")
+
+# %% — Define perturbation specs
+# Positive controls: known anti-fibrotic targets whose KO should
+# reduce predicted age affinity in hepatic stellate cells.
+POSITIVE_CONTROL_GENES = [
+    "TGFB1",    # master fibrosis driver
+    "CCN2",     # downstream of TGFB1 (CTGF)
+    "ACTA2",    # alpha-SMA, HSC activation marker
+    "COL1A1",   # collagen, fibrosis hallmark
+    "PDGFRA",   # HSC proliferation
+    "LOX",      # collagen cross-linking
+    "TIMP1",    # MMP inhibitor, ECM accumulation
+]
+
+specs = [make_noop_spec()]
+
+for gene in POSITIVE_CONTROL_GENES:
+    try:
+        eid = symbol_to_ensembl(gene)
+        if eid in token_dict:
+            specs.append(make_knockout_spec(tokenizer, eid))
+            print(f"  KO spec: {gene} -> {eid} (token {token_dict[eid]})")
+        else:
+            print(f"  SKIP: {gene} -> {eid} not in MaxToki vocabulary")
+    except KeyError as e:
+        print(f"  SKIP: {e}")
+
+print(f"\nTotal specs: {len(specs)} (1 baseline + {len(specs)-1} knockouts)")
+
+# %% — Build screen dataset
+SCREEN_DIR = OUTPUT_DIR / "screen_fibrosis_v1"
+ds_path, manifest_path = build_screen_dataset_scoring(
+    tokenizer,
+    pairs,
+    specs,
+    output_dir=SCREEN_DIR,
+    model_input_size=4096,
+)
+manifest = pd.read_csv(manifest_path)
+print(f"Screen dataset: {len(manifest)} prompts")
+print(f"  saved to: {ds_path}")
+print(f"  manifest: {manifest_path}")
+print(manifest["spec_name"].value_counts())
+
+# %% — Score screen with MaxToki-217M-HF
+import torch
+from transformers import AutoModelForCausalLM
+
+print("Loading MaxToki-217M-HF model...")
+model = AutoModelForCausalLM.from_pretrained(
+    str(HF_MODEL_PATH),
+    torch_dtype=torch.bfloat16,
+).to("cuda").eval()
+print(f"Model loaded: {sum(p.numel() for p in model.parameters()) / 1e6:.0f}M parameters")
+
+print("Scoring screen...")
+df = score_screen(model, ds_path, manifest_path, device="cuda")
+df.to_csv(SCREEN_DIR / "scored_results.csv", index=False)
+print(f"Results saved to {SCREEN_DIR / 'scored_results.csv'}")
+
+# %% — Analyze results
+# Aggregate: mean delta_vs_baseline per (spec_name, cell_type)
+if "delta_vs_baseline" in df.columns:
+    summary = (
+        df[df["spec_name"] != "baseline"]
+        .groupby(["spec_name", "cell_type"])
+        .agg(
+            mean_delta=("delta_vs_baseline", "mean"),
+            std_delta=("delta_vs_baseline", "std"),
+            n_cells=("delta_vs_baseline", "count"),
+        )
+        .sort_values("mean_delta", ascending=False)
+    )
+    print("\n=== Perturbation Screen Results ===")
+    print("Positive delta = model thinks young state more likely = more rejuvenated\n")
+    print(summary.to_string())
+
+    # Highlight: do positive controls surface in HSCs?
+    hsc_hits = summary.xs("hepatic stellate cell", level="cell_type", drop_level=False) if "hepatic stellate cell" in summary.index.get_level_values("cell_type") else pd.DataFrame()
+    if not hsc_hits.empty:
+        print("\n=== HSC-specific hits (expect TGFB1/CCN2 KO at top) ===")
+        print(hsc_hits.sort_values("mean_delta", ascending=False).to_string())
+else:
+    print("No delta_vs_baseline column — check that baseline spec was included.")
+
+# %% [markdown]
+# ## Interpretation
+#
+# - **Positive `delta_vs_baseline`**: the perturbation makes the model assign
+#   *higher* log-probability to a young successor state. The perturbed old cell
+#   "looks younger" to the model.
+# - **Negative delta**: perturbation makes the old cell look even older.
+# - **Positive controls**: `KO:ENSG*` entries for TGFB1, CCN2, ACTA2 should
+#   have the largest positive delta in HSCs if the model captures fibrosis
+#   biology. If they don't surface, the pipeline needs debugging before
+#   trusting novel hits.
+# - **Next steps**: expand to ~500 senescence/fibrosis genes (SenMayo + KEGG
+#   TGF-beta + druggable genome), then overlay with LINCS L1000 compound
+#   signatures for drug repurposing.
