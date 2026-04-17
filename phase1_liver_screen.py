@@ -61,23 +61,23 @@ for col in age_candidates:
 # %% [markdown]
 # ## MANUAL CHECK
 #
-# After running the cells above, fill in these values based on what you see:
+# After running the cells above, fill in these values based on what you see.
+# Remove or comment out the `raise SystemExit(...)` below to continue past this point.
 
-# %%
-# ---- CONFIGURE THESE AFTER INSPECTING OUTPUT ABOVE ----
-CELL_TYPE_COL = ct_col or "cell_type"  # adjust if different
-AGE_COL = "donor_age"                  # adjust based on exploration above
+# ---- Config derived from exploration of TSP1_30 liver h5ad ----
+# Donors: TSP6 (unknown age), TSP14, TSP17, TSP19 with ages [36, 59, 60, 67].
+# Only age=36 is "young"; 59 is dropped as middle; 60 and 67 are "old".
+CELL_TYPE_COL = "cell_ontology_class"
+AGE_COL = "age"
 
-# Fibrosis-relevant cell types (adjust spelling to match your data)
 FIBROSIS_CELL_TYPES = [
     "hepatocyte",
     "hepatic stellate cell",
-    "cholangiocyte",
+    "intrahepatic cholangiocyte",
 ]
 
-# Age bins (adjust based on actual donor age distribution)
-YOUNG_MAX = 35   # inclusive upper bound for "young"
-OLD_MIN = 60     # inclusive lower bound for "old"
+YOUNG_MAX = 36   # inclusive upper bound for "young" (only donor @ 36)
+OLD_MIN = 60     # inclusive lower bound for "old"  (donors @ 60, 67)
 
 # %% — Filter to fibrosis-relevant cell types
 # Try case-insensitive matching
