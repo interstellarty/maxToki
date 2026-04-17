@@ -325,21 +325,37 @@ for ct in cell_types_in_data:
         print(f"  Skipping {ct}: no young or old cells after tokenization")
         continue
 
+    # Truncate both cells so (young + old + 4 special tokens) fits in 4096.
+    # Each cell is kept to its top CELL_MAX_TOKENS by rank; higher-ranked genes
+    # are more informative, so this is a mild information loss at worst.
+    CELL_MAX_TOKENS = 2000  # 2*(2000+2) = 4004 < 4096
+
+    def _truncate(tokens):
+        # tokens come from the HF tokenizer dataset wrapped as <bos> ... <eos>.
+        if len(tokens) <= CELL_MAX_TOKENS:
+            return list(tokens)
+        # keep the leading <bos>, the top-ranked genes, and the trailing <eos>
+        bos = [tokens[0]] if tokens and tokens[0] == tokenizer.bos_id else []
+        eos = [tokens[-1]] if tokens and tokens[-1] == tokenizer.eos_id else []
+        body = tokens[len(bos): len(tokens) - len(eos)]
+        body = body[: CELL_MAX_TOKENS - len(bos) - len(eos)]
+        return [*bos, *body, *eos]
+
     # Use a single representative young anchor (median-length cell)
     young_lengths = [len(r["input_ids"]) for r in young_ct]
     anchor_idx = int(np.argsort(young_lengths)[len(young_lengths) // 2])
-    anchor_tokens = young_ct[anchor_idx]["input_ids"]
+    anchor_tokens = _truncate(young_ct[anchor_idx]["input_ids"])
 
     n_old = min(len(old_ct), MAX_CELLS_PER_TYPE)
     for i in range(n_old):
         pairs.append(CellPair(
             young_tokens=anchor_tokens,
-            old_tokens=old_ct[i]["input_ids"],
+            old_tokens=_truncate(old_ct[i]["input_ids"]),
             cell_id=f"{ct}:{i}",
             metadata={"cell_type": ct},
         ))
 
-    print(f"  {ct}: 1 young anchor, {n_old} old cells -> {n_old} pairs")
+    print(f"  {ct}: 1 young anchor (len={len(anchor_tokens)}), {n_old} old cells -> {n_old} pairs")
 
 print(f"\nTotal pairs: {len(pairs)}")
 
@@ -401,6 +417,24 @@ print("Scoring screen...")
 df = score_screen(model, ds_path, manifest_path, device="cuda")
 df.to_csv(SCREEN_DIR / "scored_results.csv", index=False)
 print(f"Results saved to {SCREEN_DIR / 'scored_results.csv'}")
+
+# %% — Diagnostic: how often did each KO actually change the prompt?
+# If the KO gene isn't in the old cell's kept rank tokens, prompt_length matches
+# the baseline exactly and delta_vs_baseline is identically 0.0.
+baseline_lengths = (
+    df[df["spec_name"] == "baseline"].set_index("pair_idx")["prompt_length"]
+)
+df["ko_took_effect"] = (
+    df["pair_idx"].map(baseline_lengths) != df["prompt_length"]
+)
+effect_rates = (
+    df[df["spec_name"] != "baseline"]
+    .groupby(["spec_name", "cell_type"])["ko_took_effect"]
+    .mean()
+    .unstack()
+)
+print("\n=== Fraction of cells where KO removed at least one token ===")
+print(effect_rates.to_string())
 
 # %% — Analyze results
 # Aggregate: mean delta_vs_baseline per (spec_name, cell_type)
