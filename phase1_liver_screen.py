@@ -164,8 +164,19 @@ else:
     print(f"  'n_counts' present, range: {adata_fib.obs['n_counts'].min():.0f} – {adata_fib.obs['n_counts'].max():.0f}")
 
 # %% — Save filtered h5ad files for tokenization
-young_h5ad = OUTPUT_DIR / "ts_liver_young.h5ad"
-old_h5ad = OUTPUT_DIR / "ts_liver_old.h5ad"
+# The MaxToki tokenizer requires obs.time and obs.unique_cell_id columns, and
+# --data-directory scans for ALL .h5ad files in the dir, so give each split
+# its own input directory.
+for adata_split in (adata_young, adata_old):
+    adata_split.obs["time"] = 0  # Tabula Sapiens is cross-sectional; use 0 as placeholder
+    adata_split.obs["unique_cell_id"] = adata_split.obs_names.astype(str)
+
+young_input_dir = OUTPUT_DIR / "input_young"
+old_input_dir = OUTPUT_DIR / "input_old"
+young_input_dir.mkdir(exist_ok=True)
+old_input_dir.mkdir(exist_ok=True)
+young_h5ad = young_input_dir / "ts_liver_young.h5ad"
+old_h5ad = old_input_dir / "ts_liver_old.h5ad"
 adata_young.write_h5ad(young_h5ad)
 adata_old.write_h5ad(old_h5ad)
 print(f"Saved {len(adata_young)} young cells -> {young_h5ad}")
@@ -174,13 +185,13 @@ print(f"Saved {len(adata_old)} old cells -> {old_h5ad}")
 # %% — Tokenize with MaxToki pipeline
 import subprocess
 
-for label, h5ad_path in [("young", young_h5ad), ("old", old_h5ad)]:
+for label, input_dir in [("young", young_input_dir), ("old", old_input_dir)]:
     out_dir = OUTPUT_DIR / f"tokenized_{label}"
     out_dir.mkdir(exist_ok=True)
 
     cmd = [
         "python", "-m", "bionemo.maxtoki.data_prep", "tokenize",
-        "--data-directory", str(h5ad_path.parent),
+        "--data-directory", str(input_dir),
         "--output-directory", str(out_dir),
         "--output-prefix", f"ts_liver_{label}",
         "--token-dictionary-file", str(TOKEN_DICT_PATH),
@@ -195,15 +206,11 @@ for label, h5ad_path in [("young", young_h5ad), ("old", old_h5ad)]:
     print(f"\nTokenizing {label} cells...")
     print(f"  Command: {' '.join(cmd)}")
 
-    # NOTE: the tokenizer expects a directory of h5ad files. We saved one file
-    # per split. If it errors, try symlinking into a dedicated folder.
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"  STDERR: {result.stderr[-2000:]}")
-        print(f"  Consider: the tokenizer scans --data-directory for ALL .h5ad files.")
-        print(f"  Fix: create a directory with only this file, or symlink.")
-    else:
-        print(f"  Done: {out_dir}")
+        raise SystemExit(f"Tokenization failed for {label}; see stderr above.")
+    print(f"  Done: {out_dir}")
 
 # %% — Load tokenized datasets and inspect
 import datasets
