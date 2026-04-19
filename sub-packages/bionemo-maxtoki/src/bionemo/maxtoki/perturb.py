@@ -116,6 +116,45 @@ def overexpress(rank_tokens: Sequence[int], gene_ids: int | Iterable[int]) -> Ra
     return [*ids, *rest]
 
 
+def soft_overexpress(
+    rank_tokens: Sequence[int],
+    gene_id: int,
+    boost_ranks: int = 50,
+) -> RankTokens:
+    """Move a gene up by ``boost_ranks`` positions (physiologically plausible OE).
+
+    Unlike :func:`overexpress`, which pins the gene to rank 0 and creates an
+    out-of-distribution profile for transcription factors (whose absolute mRNA
+    counts are normally low), this operator shifts the gene's rank by a
+    bounded amount:
+
+    * **Gene already present at rank R** → new rank ``max(0, R - boost_ranks)``.
+    * **Gene absent** → inserted at rank ``max(0, len(rank_tokens) - boost_ranks)``.
+      For ``boost_ranks >= len(rank_tokens)`` this reduces to hard OE (rank 0).
+
+    Args:
+        rank_tokens: Rank-value token list (no <bos>/<eos> wrappers).
+        gene_id: Token id of the gene to boost.
+        boost_ranks: Number of positions to move the gene toward rank 0.
+            Must be non-negative. Reasonable values: 25–200.
+
+    Returns:
+        Modified rank-value token list of length ``len(rank_tokens)`` (if the
+        gene was already present) or ``len(rank_tokens) + 1`` (if inserted).
+    """
+    if boost_ranks < 0:
+        raise ValueError(f"boost_ranks must be non-negative, got {boost_ranks}")
+    tokens = list(rank_tokens)
+    try:
+        current_rank = tokens.index(gene_id)
+        tokens.pop(current_rank)
+        new_rank = max(0, current_rank - boost_ranks)
+    except ValueError:
+        new_rank = max(0, len(tokens) - boost_ranks)
+    tokens.insert(new_rank, gene_id)
+    return tokens
+
+
 # ---------------------------------------------------------------------------
 # Perturbation specs
 # ---------------------------------------------------------------------------
@@ -160,6 +199,66 @@ def make_overexpression_spec(tokenizer: MaxTokiTokenizer, gene_symbol: str) -> P
         name=f"OE:{gene_symbol}",
         op=lambda rt, _id=token_id: overexpress(rt, _id),
         metadata={"kind": "overexpression", "gene": gene_symbol},
+    )
+
+
+def make_soft_overexpression_spec(
+    tokenizer: MaxTokiTokenizer,
+    gene_symbol: str,
+    boost_ranks: int = 50,
+) -> PerturbationSpec:
+    """Build a soft OE spec that boosts ``gene_symbol`` by ``boost_ranks`` positions.
+
+    Physiologically more realistic than :func:`make_overexpression_spec` for
+    transcription factors: TFs normally sit mid-rank, and pinning them to
+    rank 0 makes the profile out-of-distribution for the model. See
+    :func:`soft_overexpress` for the rank-shift semantics.
+    """
+    token_id = _gene_id(tokenizer, gene_symbol)
+    return PerturbationSpec(
+        name=f"sOE{boost_ranks}:{gene_symbol}",
+        op=lambda rt, _id=token_id, _k=boost_ranks: soft_overexpress(rt, _id, _k),
+        metadata={
+            "kind": "soft_overexpression",
+            "gene": gene_symbol,
+            "boost_ranks": str(boost_ranks),
+        },
+    )
+
+
+def make_soft_combo_spec(
+    tokenizer: MaxTokiTokenizer,
+    overexpressions: Sequence[str],
+    boost_ranks: int = 50,
+    name: str | None = None,
+) -> PerturbationSpec:
+    """Build a soft-OE combo spec (e.g. OSKM) that boosts each gene by ``boost_ranks``.
+
+    Genes are boosted sequentially in the given order via :func:`soft_overexpress`.
+    For absent genes in a cell with few tokens, boosts stack near the top because
+    each insertion extends the list; for very large ``boost_ranks`` this reduces
+    to hard multi-gene OE.
+    """
+    ids = [_gene_id(tokenizer, g) for g in overexpressions]
+
+    def op(rt: RankTokens, _ids=ids, _k=boost_ranks) -> RankTokens:
+        out = list(rt)
+        for gid in _ids:
+            out = soft_overexpress(out, gid, _k)
+        return out
+
+    if name is None:
+        name = f"sOE{boost_ranks}_COMBO:{'+'.join(overexpressions)}"
+    else:
+        name = f"sOE{boost_ranks}_COMBO:{name}"
+    return PerturbationSpec(
+        name=name,
+        op=op,
+        metadata={
+            "kind": "soft_overexpression_combo",
+            "overexpressions": ",".join(overexpressions),
+            "boost_ranks": str(boost_ranks),
+        },
     )
 
 
