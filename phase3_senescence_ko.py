@@ -15,8 +15,26 @@
 # distribution of 50 random-gene KOs, restricted to cells where the KO
 # actually dropped a token (`ko_took_effect`).
 #
-# Writes a formatted markdown results file to
-# `/ptmp/$USER/liver_screen_phase3/phase3_results.md`.
+# ## Scale-up rationale (vs. the original Phase 3 run at MAX_CELLS_PER_TYPE=50)
+#
+# The initial run surfaced CDKN1A (p21) KO in hepatocytes at z = +1.93 —
+# directionally correct but just below the |z| ≥ 2 threshold — on only
+# **n = 3 effective cells** (p21 is in the top-2000 tokens of only 6% of old
+# hepatocytes). Every senescence driver pointed positive and every longevity
+# gene pointed neutral-to-negative, but no hit crossed significance.
+#
+# To resolve whether the top hit is a real signal or small-n noise, this
+# version bumps `MAX_CELLS_PER_TYPE` from 50 → 500. TSP has hundreds of old
+# hepatocytes available; scaling the sample keeps the baseline pair count up
+# (so 6% × 500 = ~30 effective cells for CDKN1A, vs. 3 previously) without
+# changing any other part of the pipeline. If CDKN1A moves to z ≥ 3 it is a
+# solid hit; if it stays around z ≈ 1–2 it is likely noise. Runtime grows
+# roughly linearly with pair count — expect ~3 hours on A100 instead of ~20
+# minutes, so launch via sbatch or tmux.
+#
+# Outputs are written to `/ptmp/$USER/liver_screen_phase3b/` and
+# `phase3b_results.md` (separate from the original Phase 3 outputs so the
+# n=50 results and their manual interpretation are preserved).
 
 # %% — Imports and config
 import json
@@ -34,12 +52,12 @@ TOKEN_DICT_PATH = RESOURCES / "token_dictionary_v1.json"
 ENSEMBL_MAP_PATH = RESOURCES / "ensembl_mapping_dict_v1.json"
 HF_MODEL_PATH = Path("/ptmp/artfi/models/maxtoki-hf/MaxToki-217M-HF")
 PHASE1_DIR = Path("/ptmp/artfi/liver_screen")
-OUTPUT_DIR = Path("/ptmp/artfi/liver_screen_phase3")
+OUTPUT_DIR = Path("/ptmp/artfi/liver_screen_phase3b")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 CELL_TYPE_COL = "cell_ontology_class"
 CELL_MAX_TOKENS = 2000
-MAX_CELLS_PER_TYPE = 50
+MAX_CELLS_PER_TYPE = 500  # bumped from 50 to resolve n=3 CDKN1A hit
 N_NULL_GENES = 50
 SEED = 42
 
@@ -187,7 +205,7 @@ print(
 )
 
 # %% — Build screen dataset
-SCREEN_DIR = OUTPUT_DIR / "screen_senescence_ko_v1"
+SCREEN_DIR = OUTPUT_DIR / "screen_senescence_ko_scaled_v1"
 ds_path, manifest_path = build_screen_dataset_scoring(
     tokenizer,
     pairs,
@@ -395,12 +413,12 @@ for fname in ["scored_results.csv", "ko_effect_rates.csv", "null_stats.csv", "po
 md.append(f"\nRegenerate with `python phase3_senescence_ko.py` on branch "
           f"`claude/continue-previous-session-E56FX`.\n")
 
-md_path = OUTPUT_DIR / "phase3_results.md"
+md_path = OUTPUT_DIR / "phase3b_results.md"
 md_path.write_text("\n".join(md))
 print(f"\nWrote markdown summary to {md_path}")
 
 # Also drop a copy next to the repo for easy git-add.
-repo_md = Path("/workspace/phase3_results.md")
+repo_md = Path("/workspace/phase3b_results.md")
 try:
     repo_md.write_text("\n".join(md))
     print(f"Wrote copy to {repo_md} (commit from host to preserve across runs).")
