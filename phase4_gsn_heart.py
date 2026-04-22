@@ -52,8 +52,8 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 CELL_TYPE_COL = "cell_ontology_class"
 AGE_COL = "age"
 FIBROBLAST_SUBSTR = "fibroblast"   # substring-match in cell_ontology_class (case-insensitive)
-YOUNG_MAX_AGE = 40
-OLD_MIN_AGE = 55
+YOUNG_MAX_AGE = 45   # TSP heart cardiac-fibroblast age distribution: 45, 56, 60, 61, 74. Pick the 45yo donor only.
+OLD_MIN_AGE = 60     # Skip the 56yo grey-zone donor; old = 60 / 61 / 74 → 534 cells, >= 15 yr gap vs young.
 
 CELL_MAX_TOKENS = 2000
 MAX_CELLS = 500
