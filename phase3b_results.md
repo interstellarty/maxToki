@@ -95,6 +95,64 @@ A gene with low effect rate is absent from most old cells' top-2000 tokens — a
 
 No longevity-gene KO passed |z| ≥ 2.0. Negative controls behave as expected.
 
+## Interpretation
+
+**The scale-up did its job.** Hepatocyte null std collapsed 0.0041 → 0.0012
+(3.4× tighter), matching the expected √(500/50) ≈ 3.2× gain from pure sampling.
+Cholangiocytes filled in at n=82. HSCs remain stuck at n=9 — data-limited, not
+run-limited.
+
+**The Phase 3 "hit" was noise.** CDKN1A hepatocyte went from z=+1.93 (n=3) to
+z=+0.54 (n=13). Classic regression to the mean — confirms the earlier flag was
+a small-sample fluke. The only new z ≥ 2 is CXCL8 hepatocyte z=+2.17 on n=3
+effective cells out of 500 (effect rate 1%). Same structural issue — noise at
+the tail of the null distribution. Not a real hit.
+
+**All well-powered measurements are null.**
+
+| gene | cell_type | n_effective | z |
+|---|---|---:|---:|
+| FOXO3 | hepatocyte | 287 | −0.37 |
+| MDM2 | hepatocyte | 282 | −1.12 |
+| GLB1 | hepatocyte | 138 | −0.79 |
+| SERPINE1 | hepatocyte | 126 | +0.38 |
+| RB1 | hepatocyte | 59 | −0.27 |
+| SIRT1 | hepatocyte | 54 | −1.09 |
+
+When we have actual statistical power (n > ~50), nothing clears z = 1. That's
+the honest signal.
+
+**Coherent sub-threshold pattern in cholangiocytes.** TP53 z=+1.58 (n=7),
+MDM2 z=+1.13 (n=25), RB1 z=+0.97 (n=27), CDKN2A z=+0.57 (n=1). Three genuine
+senescence drivers all point positive in the same cell type, none individually
+passes z=2, but the collective direction is right. Cholangiocytes are also the
+cell type most tied to age-related biliary disease — biologically not
+implausible, though under-powered.
+
+**Negative controls behaved.** FOXO3 / SIRT1 / SIRT6 never cross z=+1 in the
+well-powered hepatocyte column. No false-positive longevity "rejuvenation,"
+so the null is calibrated.
+
+## Bottom line
+
+Scaling 50 → 500 killed the single tentative Phase 3 hit and didn't resurrect
+it as a real one. MaxToki + the current within-cell-type young-anchor readout
+cannot resolve senescence-KO rejuvenation at z ≥ 2 in TSP liver, even with 10×
+the cells. The TSP bottleneck identified in Phase 3 (IL6 / TNF / MMP3 at 0 %
+expression; CXCL8 at 1 %; CDKN2A at 0 %) is still the binding constraint —
+you can't KO what isn't tokenized.
+
+## Next steps
+
+1. **Dataset with actual senescent load.** Aged mouse liver, NASH cohort, or
+   a fibrotic-liver atlas where the SASP genes are actually expressed above
+   the top-2000 threshold.
+2. **Signature-level OE** (Phase 2b §Next steps #2) — OE the TF's DoRothEA/
+   TRRUST downstream targets rather than the TF itself; bypasses both the
+   rank-displacement problem and the expression-bottleneck problem.
+3. **Young-anchor ensembling** — average log-prob over multiple young anchors
+   per cell type to kill anchor-specific identity noise; cheap extension.
+
 ## Provenance
 
 Outputs in `/ptmp/artfi/liver_screen_phase3b/screen_senescence_ko_scaled_v1/`:
