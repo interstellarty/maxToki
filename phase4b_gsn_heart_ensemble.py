@@ -132,28 +132,22 @@ if gsn_eid not in token_dict:
     raise SystemExit(f"{TARGET_GENE} ({gsn_eid}) not in MaxToki vocab")
 
 specs.append(make_knockout_spec(tokenizer, gsn_eid))
-specs.append(make_soft_overexpression_spec(tokenizer, TARGET_GENE, boost_ranks=SOFT_OE_BOOST))
-print(f"Target specs: KO:{TARGET_GENE}, sOE{SOFT_OE_BOOST}:{TARGET_GENE}")
+specs.append(make_soft_overexpression_spec(tokenizer, gsn_eid, boost_ranks=SOFT_OE_BOOST))
+print(f"Target specs: KO:{gsn_eid}, sOE{SOFT_OE_BOOST}:{gsn_eid} (GSN)")
 
 _rng = random.Random(SEED)
 _vocab_ensgs = [k for k in token_dict if isinstance(k, str) and k.startswith("ENSG")]
 _null_pool = [e for e in _vocab_ensgs if e != gsn_eid]
 null_ensgs = _rng.sample(_null_pool, N_NULL_GENES)
-ensg_to_symbol_inv = {v.upper(): k for k, v in ensembl_map.items() if isinstance(v, str)}
 
 # 50 null KOs
 for eid in null_ensgs:
     specs.append(make_knockout_spec(tokenizer, eid))
 
-# 50 null sOE (applied to the *same* 50 random genes, so operator is the only
-# thing that differs between KO null and sOE null).
+# 50 null sOE — apply sOE50 to the *same* 50 random Ensembl IDs so operator is
+# the only thing that differs between the KO null and the sOE null.
 for eid in null_ensgs:
-    sym = ensg_to_symbol_inv.get(eid, eid)  # fall back to Ensembl if no symbol
-    try:
-        specs.append(make_soft_overexpression_spec(tokenizer, sym, boost_ranks=SOFT_OE_BOOST))
-    except KeyError:
-        # If the symbol lookup fails (shouldn't, but be safe), just drop this null.
-        pass
+    specs.append(make_soft_overexpression_spec(tokenizer, eid, boost_ranks=SOFT_OE_BOOST))
 
 print(f"Total specs: {len(specs)} "
       f"(1 baseline + 2 target + {N_NULL_GENES} null-KO + up-to-{N_NULL_GENES} null-sOE)")
@@ -210,12 +204,9 @@ print(f"After ensembling: {len(per_old)} (spec, old_idx) cells with ≥3 effecti
 
 # Tag spec classes
 gsn_ko = f"KO:{gsn_eid}"
-gsn_soe = f"sOE{SOFT_OE_BOOST}:{TARGET_GENE}"
+gsn_soe = f"sOE{SOFT_OE_BOOST}:{gsn_eid}"
 null_ko_specs = {f"KO:{e}" for e in null_ensgs}
-null_soe_specs = set()
-for eid in null_ensgs:
-    sym = ensg_to_symbol_inv.get(eid, eid)
-    null_soe_specs.add(f"sOE{SOFT_OE_BOOST}:{sym}")
+null_soe_specs = {f"sOE{SOFT_OE_BOOST}:{e}" for e in null_ensgs}
 
 def classify(spec_name):
     if spec_name == "baseline":
