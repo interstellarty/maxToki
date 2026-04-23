@@ -9,14 +9,25 @@
 #        wget -O tissue.rdata \
 #          "https://datashare.ed.ac.uk/bitstream/handle/10283/3433/tissue.rdata?sequence=3&isAllowed=y"
 #
-#   2. Convert rdata -> h5ad (R + SeuratDisk). The Raven login node has R
-#      available as a module; if SeuratDisk isn't installed, the R script
-#      prints install instructions.
+#   2. Dump MTX + metadata from the Seurat rdata using R (SeuratObject only
+#      — minimal deps, no hdf5r/Shiny cascade). One-time package install:
+#        mkdir -p ~/R/library
+#        export R_LIBS_USER=~/R/library           # add to ~/.bashrc
+#        Rscript -e 'install.packages("SeuratObject", repos="https://cloud.r-project.org")'
+#      Then run the dump:
 #        module load R
 #        cd /ptmp/$USER/liver_fibrosis_phase5
 #        Rscript $HOME/maxToki/convert_ramachandran_to_h5ad.R
+#      Produces counts.mtx, genes.tsv, barcodes.tsv, obs.csv.
 #
-#   3. Confirm tissue.h5ad exists:
+#   3. Assemble tissue.h5ad from the MTX files (inside apptainer so scanpy
+#      is available):
+#        apptainer exec -B $HOME/maxToki:/workspace -B /ptmp/$USER:/ptmp/$USER \
+#            $HOME/maxToki/maxtoki.sif \
+#            bash -c "cd /ptmp/$USER/liver_fibrosis_phase5 && \
+#                     python /workspace/assemble_ramachandran_h5ad.py"
+#
+#   4. Confirm tissue.h5ad exists:
 #        ls -lh /ptmp/$USER/liver_fibrosis_phase5/tissue.h5ad
 #
 # Then submit:
