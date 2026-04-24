@@ -76,6 +76,81 @@ Low effect rate → gene rarely in top-2000 tokens → z-score rests on few cell
 
 No pro-fibrotic neg-ctrl KO passed |z| >= 2.0. Negative controls behave as expected.
 
+## Interpretation: end of the LL-readout line
+
+Phase 5 was effectively a best-case stress test for the log-likelihood-of-
+healthy-anchor readout:
+
+- **Largest biological contrast** tried across all five phases — activated
+  vs quiescent HSCs differ more than any aging axis we looked at.
+- **Most canonical target possible** — ACTA2 is *the* defining marker of
+  myofibroblasts; there is no more textbook KO to attempt.
+- **Best statistical power** — n=418 effective cells for ACTA2;
+  null std = 0.0016 over 32 effective genes (cleaner than Phase 4b's 0.0015).
+- **No expression bottleneck** — 85–91% effect rates for the top targets,
+  unlike the 0%/1% rates that killed Phase 3's SASP KOs.
+
+Top result: **ACTA2 at z = +0.28**. Direction correct, magnitude nowhere
+near the z = +2 threshold.
+
+This rules out, in turn:
+1. **Anchor noise** — n=418 averages out single-anchor idiosyncrasies.
+2. **Model capacity** — confirmed separately (Phase 4c was set up for this
+   test before being cancelled).
+3. **Expression bottleneck** — absent here.
+4. **Wrong biology** — TGFB1, SMAD3, CCN2, COL1A1, ACTA2 are the most
+   literature-canonical antifibrotic targets in existence.
+
+The remaining explanation is structural. The LL readout asks, *"is the full
+2000-gene profile of this perturbed cell more likely to be followed by a
+quiescent cell?"* Removing one gene token leaves the other 1999 tokens
+still overwhelmingly coding for "activated HSC," so the likelihood of the
+quiescent anchor barely moves. The model sees a myofibroblast-minus-ACTA2
+as still a myofibroblast, not as a slightly more quiescent cell. This is
+the same identity-saturation mechanism Phase 2b identified for the aging
+axis, and Phase 5 confirms it generalizes to the disease-state axis. It is
+a *property of the readout*, not a data or power limitation.
+
+The paper's method avoids this because the TimeBetweenCells regression
+head is trained to read perturbation → direction as a one-dimensional
+scalar shift, amplifying a single-gene change. LL cannot do that.
+
+## Stopping criterion
+
+Trying other fibroblast sources (dermal, pulmonary, kidney) or other liver
+fibrosis datasets (Guilliams 2022, Govaere 2023, Wang 2024 MASLD) would
+hit the same ceiling — same biological axis, same one-token-of-2000 math.
+More runs at this framing are unlikely to change the conclusion, so the
+LL-readout line of investigation is closed here.
+
+## Cross-phase summary
+
+| phase | axis | target | best z | n_eff | verdict |
+|---|---|---|---:|---:|---|
+| 2 | aging, hard OE | OSK_L (HSC) | −2.46 | − | OOD artifact |
+| 2b | aging, soft OE | OSKM (hep) | −3.14 | 50 | identity loss, not rejuvenation |
+| 3 | aging KO | CDKN1A (hep) | +1.93 | 3 | underpowered, later regressed |
+| 3b | aging KO | CDKN1A (hep) | +0.54 | 13 | Phase 3 hit was noise |
+| 4 | aging KO | GSN (cardiac fib) | −0.83 | 490 | null; wrong head suspected |
+| 4b | aging KO ensemble | GSN (cardiac fib) | −0.31 | 198 | ensemble confirms null |
+| 5 | disease KO | ACTA2 (HSC) | **+0.28** | **418** | best conditions, still null |
+
+## Next steps
+
+1. **Wait for the second-stage checkpoint.** The Theodoris lab confirmed
+   the fine-tuned TimeBetweenCells variant will be shared after peer
+   review. That is the only artifact that unblocks the paper's
+   perturbation framework.
+2. **Take the collaboration offer.** The corresponding-author reply
+   included *"if you are interested in applying the specific aging model
+   we trained to answer a new biological question we'd be happy to meet
+   and discuss potential collaborations."* Liver fibrosis / MASH is a
+   natural fit, and Phases 1–5 now constitute well-characterized
+   context about the pretraining checkpoint's limits that can frame
+   that conversation.
+3. **Do not run further LL-readout screens.** Additional datasets or
+   cell types are expected to reproduce this negative.
+
 ## Provenance
 
 Outputs in `/ptmp/artfi/liver_fibrosis_phase5/screen_hsc_fibrosis_v1/`:
