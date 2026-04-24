@@ -460,6 +460,7 @@ md.append(f"- Null std: {null_std:.4f}\n")
 md.append("## KO effect rates (fraction of activated HSCs where KO dropped a token)\n")
 md.append("Low effect rate → gene rarely in top-2000 tokens → z-score rests on few cells.\n")
 effect_df = effect_rates.reset_index()
+effect_df.columns = ["spec_name", "effect_rate"]
 effect_df["gene_symbol"] = effect_df["spec_name"].str.replace("KO:", "", regex=False).map(ensg_to_symbol)
 effect_df["gene_category"] = effect_df["gene_symbol"].map(GENE_CATEGORY)
 effect_df = effect_df[effect_df["gene_symbol"].notna()].sort_values("effect_rate", ascending=False)
