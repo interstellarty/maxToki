@@ -120,26 +120,40 @@ print(f"Using condition column: {CONDITION_COL!r}")
 print(f"\n{CONDITION_COL} counts:")
 print(adata.obs[CONDITION_COL].value_counts())
 
-# %% — Filter to HSCs
+# %% — Filter to HSC-family cells (mesenchyme + myofibroblasts)
+# Ramachandran 2019 labels: "Mesenchyme (1)", "Mesenchyme (2)" are quiescent
+# portal/central-vein HSCs; "Myofibroblasts" are activated fibrogenic HSCs.
+# Condition labels are "Uninjured" / "Cirrhotic".
 ct_lower = adata.obs[CELL_TYPE_COL].astype(str).str.lower()
-hsc_mask = ct_lower.str.contains("stellate") | ct_lower.str.contains("hsc")
-print(f"\nHSC-matching cells: {hsc_mask.sum()} / {len(adata)}")
+is_mesenchyme = ct_lower.str.contains("mesenchyme") | ct_lower.str.contains("stellate") | ct_lower.str.contains("hsc")
+is_myofibroblast = ct_lower.str.contains("myofibroblast")
+hsc_mask = is_mesenchyme | is_myofibroblast
+print(f"\nHSC-family cells: {hsc_mask.sum()} / {len(adata)}")
 if hsc_mask.sum() == 0:
     raise SystemExit(
-        f"No HSCs matched. {CELL_TYPE_COL} value counts:\n"
+        f"No HSC-family cells matched. {CELL_TYPE_COL} value counts:\n"
         f"{adata.obs[CELL_TYPE_COL].value_counts()}"
     )
 print(adata.obs.loc[hsc_mask, CELL_TYPE_COL].value_counts())
 
 adata_hsc = adata[hsc_mask].copy()
 
-# %% — Split activated (cirrhotic) vs quiescent (healthy)
+# %% — Split activated (cirrhotic / myofibroblast) vs quiescent (uninjured mesenchyme)
 cond_lower = adata_hsc.obs[CONDITION_COL].astype(str).str.lower()
-activated_mask = cond_lower.str.contains("cirrh") | cond_lower.str.contains("fibro") | cond_lower.str.contains("disease")
-quiescent_mask = cond_lower.str.contains("healthy") | cond_lower.str.contains("normal") | cond_lower.str.contains("control")
+ct_lower_hsc = adata_hsc.obs[CELL_TYPE_COL].astype(str).str.lower()
 
-print(f"\nActivated HSCs (cirrhotic/fibrotic/diseased): {activated_mask.sum()}")
-print(f"Quiescent HSCs (healthy/normal/control):     {quiescent_mask.sum()}")
+is_mesenchyme_hsc = ct_lower_hsc.str.contains("mesenchyme") | ct_lower_hsc.str.contains("stellate") | ct_lower_hsc.str.contains("hsc")
+is_myofibroblast_hsc = ct_lower_hsc.str.contains("myofibroblast")
+is_disease = cond_lower.str.contains("cirrh") | cond_lower.str.contains("fibro") | cond_lower.str.contains("disease")
+is_healthy = cond_lower.str.contains("uninjured") | cond_lower.str.contains("healthy") | cond_lower.str.contains("normal") | cond_lower.str.contains("control")
+
+# Activated: any myofibroblast, OR mesenchyme from cirrhotic donors
+activated_mask = is_myofibroblast_hsc | (is_mesenchyme_hsc & is_disease)
+# Quiescent: mesenchyme from uninjured donors
+quiescent_mask = is_mesenchyme_hsc & is_healthy
+
+print(f"\nActivated HSCs (myofibroblast + cirrhotic mesenchyme): {activated_mask.sum()}")
+print(f"Quiescent HSCs (uninjured mesenchyme):                 {quiescent_mask.sum()}")
 if activated_mask.sum() == 0 or quiescent_mask.sum() == 0:
     print("Condition value counts within HSCs:")
     print(adata_hsc.obs[CONDITION_COL].value_counts())
